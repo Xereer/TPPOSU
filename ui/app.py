@@ -12,6 +12,7 @@ from ui.database import Experiments, Measurements, engine
 import os
 import pandas as pd
 from pathlib import Path
+import json
 from sqlmodel import select
 
 from ui.cpp_bridge import run_measurement_pipeline, save_measurement_run
@@ -420,7 +421,7 @@ class App(ctk.CTk):
         buttons = [
             # ("Регистрация данных", self.open_registration_setup),
             ("Управление данными", self.open_data_management),
-            ("Научно-технический расчет", None),
+            ("Научно-технический расчет", self.open_calculation_window),
             ("О программе", self.open_about),
         ]
 
@@ -594,6 +595,14 @@ class App(ctk.CTk):
 
     def open_registration_setup(self):
         RegistrationSetupWindow(self)
+        self.add_log("Открыто окно 'Регистрации данных'")
+
+    def open_data_management(self):
+        DataManagementWindow(self)
+        self.add_log("Открыто окно 'Управление данными'")
+    def open_calculation_window(self):
+        CalculationWindow(self)
+        self.add_log("Открыто окно 'Научно-технический расчёт'")
 
     def open_about(self):
         AboutWindow(self)
