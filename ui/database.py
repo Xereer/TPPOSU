@@ -38,7 +38,7 @@ class Measurements(SQLModel, table=True):
     experiments: Optional[Experiments] = Relationship(back_populates="measurements")
 
 sqlite_url = "sqlite:///data/database.db"
-engine = create_engine(sqlite_url, echo=True)
+engine = create_engine(sqlite_url, echo=False)
 
 def create_database_and_tables():
     SQLModel.metadata.create_all(engine)

@@ -1,5 +1,8 @@
 import os
 import sys
+
+os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
+
 from ui import App
 from ui.database import create_database_and_tables
 
