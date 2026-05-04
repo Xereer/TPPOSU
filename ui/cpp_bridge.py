@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import os
 import subprocess
 from typing import Callable, List, Optional
 
@@ -23,16 +24,30 @@ class MeasurementRunResult:
 
 def get_measurement_executable() -> Path:
     root = Path(__file__).resolve().parent.parent
-    candidates = [
-        root / "core_cpp" / "Practice.exe",
-        root / "core_cpp" / "Practice",
-        root / "core_cpp" / "Release" / "Practice.exe",
-        root / "core_cpp" / "Debug" / "Practice.exe",
-    ]
+    if os.name == "nt":
+        candidates = [
+            root / "core_cpp" / "Practice.exe",
+            root / "core_cpp" / "Release" / "Practice.exe",
+            root / "core_cpp" / "Debug" / "Practice.exe",
+        ]
+    else:
+        candidates = [
+            root / "core_cpp" / "Practice",
+            root / "core_cpp" / "Practice.exe",
+            root / "core_cpp" / "Release" / "Practice.exe",
+            root / "core_cpp" / "Debug" / "Practice.exe",
+        ]
 
     for candidate in candidates:
         if candidate.exists():
             return candidate
+
+    if os.name == "nt":
+        raise FileNotFoundError(
+            "Не найден Windows-исполняемый файл Practice.exe. "
+            "Соберите C++-часть и убедитесь, что существует один из файлов: "
+            "core_cpp\\Practice.exe, core_cpp\\Release\\Practice.exe, core_cpp\\Debug\\Practice.exe."
+        )
 
     raise FileNotFoundError(
         "Не найден исполняемый файл core_cpp/Practice(.exe). "
