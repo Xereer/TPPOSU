@@ -241,6 +241,346 @@ class DownloadWindow(ctk.CTkToplevel):
 
     def load_experiments(self):
         with Session(engine) as session:
+            objects = []
+
+            for row in batch:
+                obj = Measurements(
+                    experiment_id=experiment_id,
+                    number=row[0],
+                    channel_1=row[1],
+                    channel_2=row[2],
+                    channel_3=row[3],
+                    channel_4=row[4],
+                    channel_5=row[5],
+                    channel_6_avg=row[6],
+                    channel_6_disp=row[7],
+                    channel_19=row[8],
+                    channel_49=row[9],
+                    channel_69_func=row[10]
+                )
+                objects.append(obj)
+
+            session.add_all(objects)
+            session.commit()
+    
+    def finish_experiment(self):
+        from datetime import datetime
+
+        with Session(engine) as session:
+            exp = session.get(Experiments, self.experiment_id)
+            if exp:
+                exp.end_time = datetime.now()
+                session.add(exp)
+                session.commit()
+
+        self.master.add_log(f"⏹ Эксперимент завершён (ID={self.experiment_id})")
+        self.master.download_btn.configure(state="normal")
+
+class DownloadWindow(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Скачать данные эксперимента")
+        self.geometry("480x320")
+        self.attributes("-topmost", True)
+        self.grab_set()
+        self.after(100, self._center_window)
+
+        ctk.CTkLabel(self, text="Скачать данные", 
+                     font=("Arial", 18, "bold")).pack(pady=20)
+
+        # Выбор эксперимента
+        ctk.CTkLabel(self, text="Эксперимент:", font=("Arial", 14)).pack(anchor="w", padx=40, pady=(10, 5))
+        self.exp_combo = ctk.CTkComboBox(self, width=400)
+        self.exp_combo.pack(pady=8, padx=40)
+        self.experiments_map = {}
+
+        # Выбор формата
+        ctk.CTkLabel(self, text="Формат сохранения:", font=("Arial", 14)).pack(anchor="w", padx=40, pady=(20, 5))
+        
+        self.format_var = ctk.StringVar(value="excel")
+        
+        ctk.CTkRadioButton(self, text="Таблица Excel (.xlsx)", 
+                          variable=self.format_var, value="excel").pack(anchor="w", padx=60, pady=6)
+        ctk.CTkRadioButton(self, text="Загрузить в НТР (JSON)", 
+                          variable=self.format_var, value="json").pack(anchor="w", padx=60, pady=6)
+
+        # Кнопки
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=30)
+        
+        ctk.CTkButton(btn_frame, text="Скачать", width=180, height=40,
+                      font=("Arial", 14, "bold"),
+                      command=self.start_download).pack(side="left", padx=10)
+        
+        ctk.CTkButton(btn_frame, text="Отмена", width=120, height=40,
+                      command=self.destroy).pack(side="left", padx=10)
+
+        self.load_experiments()
+
+    def _center_window(self):
+        x = self.master.winfo_x() + (self.master.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = self.master.winfo_y() + (self.master.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+
+    def load_experiments(self):
+        with Session(engine) as session:
+            exps = session.exec(select(Experiments).order_by(Experiments.id.desc())).all()
+            
+            values = []
+            for exp in exps:
+                display = f"{exp.id} | {exp.name} | {exp.operator}"
+                values.append(display)
+                self.experiments_map[display] = exp.id
+                
+            if values:
+                self.exp_combo.configure(values=values)
+                self.exp_combo.set(values[0])  # последний эксперимент по умолчанию
+            else:
+                self.exp_combo.configure(values=["Нет экспериментов"])
+                self.exp_combo.set("Нет экспериментов")
+
+    def start_download(self):
+        selected = self.exp_combo.get()
+        if not selected or selected.startswith("Нет"):
+            self.parent.add_log("❌ Эксперимент не выбран")
+            return
+
+        exp_id = self.experiments_map[selected]
+        format_type = self.format_var.get()
+
+        if format_type == "excel":
+            self.download_excel(exp_id)
+        else:
+            self.download_json(exp_id)
+
+        self.destroy()
+
+    def download_excel(self, exp_id):
+        try:
+            with Session(engine) as session:
+                exp = session.get(Experiments, exp_id)
+                measurements = session.exec(
+                    select(Measurements)
+                    .where(Measurements.experiment_id == exp_id)
+                    .order_by(Measurements.number)
+                ).all()
+
+            if not measurements:
+                self.parent.add_log("❌ В эксперименте нет данных")
+                return
+
+            data = [[
+                m.number, m.channel_1, m.channel_2, m.channel_3, m.channel_4,
+                m.channel_5, m.channel_6_avg, m.channel_6_disp,
+                m.channel_19, m.channel_49, m.channel_69_func
+            ] for m in measurements]
+
+            df = pd.DataFrame(data, columns=self.parent.headers)
+
+            Path("data").mkdir(exist_ok=True)
+            safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in exp.name)
+            filename = f"{exp.id}_{safe_name}_{exp.operator}.xlsx"
+            filepath = os.path.join("data", filename)
+
+            df.to_excel(filepath, index=False, engine='openpyxl')
+            
+            self.parent.add_log(f"✅ Данные сохранены в Excel: {filepath}")
+            # os.startfile(os.path.abspath("data"))  # раскомментируйте для автопоказа папки
+
+        except Exception as e:
+            self.parent.add_log(f"❌ Ошибка сохранения Excel: {e}")
+
+    def download_json(self, exp_id):
+        try:
+            with Session(engine) as session:
+                # Получаем эксперимент
+                exp = session.get(Experiments, exp_id)
+                if not exp:
+                    self.parent.add_log("❌ Эксперимент не найден")
+                    return
+
+                # Получаем все измерения
+                measurements = session.exec(
+                    select(Measurements)
+                    .where(Measurements.experiment_id == exp_id)
+                    .order_by(Measurements.number)
+                ).all()
+
+                if not measurements:
+                    self.parent.add_log("❌ В эксперименте нет данных")
+                    return
+
+                # Формируем данные эксперимента
+                experiment_data = {
+                    "id": exp.id,
+                    "start_time": exp.start_time.isoformat() if exp.start_time else None,
+                    "end_time": exp.end_time.isoformat() if exp.end_time else None,
+                    "operator": exp.operator
+                }
+
+                # Формируем список измерений как объекты
+                measurements_list = []
+                for m in measurements:
+                    measurements_list.append({
+                        "number": m.number,
+                        "channel_1": m.channel_1,
+                        "channel_2": m.channel_2,
+                        "channel_3": m.channel_3,
+                        "channel_4": m.channel_4,
+                        "channel_5": m.channel_5,
+                        "channel_6_avg": m.channel_6_avg,
+                        "channel_6_disp": m.channel_6_disp,
+                        "channel_19": m.channel_19,
+                        "channel_49": m.channel_49,
+                        "channel_69_func": m.channel_69_func
+                    })
+
+                # Итоговая структура
+                export_data = {
+                    "experiment": experiment_data,
+                    "measurements": measurements_list
+                }
+
+                # Сохранение файла
+                Path("data").mkdir(exist_ok=True)
+                
+                safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in exp.name)
+                filename = f"{exp.id}_{safe_name}_{exp.operator}.json"
+                filepath = os.path.join("data", filename)
+
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(export_data, f, ensure_ascii=False, indent=2)
+
+                self.parent.add_log(f"✅ Данные сохранены в JSON (новый формат): {filepath}")
+
+        except Exception as e:
+            self.parent.add_log(f"❌ Ошибка сохранения JSON: {e}")
+
+class CalculationWindow(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        
+        self.title("Научно-технический расчёт")
+        self.geometry("500x280")
+        self.attributes("-topmost", True)
+        self.grab_set()
+        self.after(100, self._center_window)
+
+        ctk.CTkLabel(self, text="Научно-технический расчёт", 
+                     font=("Arial", 18, "bold")).pack(pady=15)
+
+        ctk.CTkLabel(self, text="Выберите файл эксперимента (JSON):", 
+                     font=("Arial", 14)).pack(anchor="w", padx=40, pady=(10, 5))
+
+        self.file_combo = ctk.CTkComboBox(self, width=420, values=[])
+        self.file_combo.pack(pady=8, padx=40)
+
+        # Кнопки
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=20)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="🔄 Обновить список",
+            width=180,
+            command=self.load_json_files
+        ).pack(side="left", padx=10)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="📊 Загрузить данные для расчетов",
+            width=220,
+            height=40,
+            font=("Arial", 14, "bold"),
+            command=self.load_and_show_data
+        ).pack(side="left", padx=10)
+
+        self.load_json_files()  # Автозагрузка при открытии
+
+    def _center_window(self):
+        x = self.master.winfo_x() + (self.master.winfo_width() // 2) - (self.winfo_width() // 2)
+        y = self.master.winfo_y() + (self.master.winfo_height() // 2) - (self.winfo_height() // 2)
+        self.geometry(f"+{x}+{y}")
+
+    def load_json_files(self):
+        """Обновляет список JSON-файлов в папке data"""
+        data_path = Path("data")
+        data_path.mkdir(exist_ok=True)
+
+        json_files = sorted(
+            data_path.glob("*.json"),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True
+        )
+
+        if not json_files:
+            self.file_combo.configure(values=["Нет JSON-файлов в папке data/"])
+            self.file_combo.set("Нет JSON-файлов в папке data/")
+            return
+
+        file_names = [f.name for f in json_files]
+        self.file_combo.configure(values=file_names)
+        
+        if file_names:
+            self.file_combo.set(file_names[0])  # самый новый файл по умолчанию
+
+    def load_and_show_data(self):
+        """Загружает выбранный JSON и передаёт данные в главное окно"""
+        selected = self.file_combo.get()
+        if not selected or "Нет JSON-файлов" in selected:
+            self.parent.add_log("❌ JSON-файл не выбран")
+            return
+
+        file_path = Path("data") / selected
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # === Новый формат ===
+            if isinstance(data, dict) and "experiment" in data and "measurements" in data:
+                measurements = data["measurements"]
+                
+                # Создаём заголовки
+                headers = [
+                    "Кадр", "Канал 1", "Канал 2", "Канал 3", "Канал 4", "Канал 5",
+                    "Канал 6 Среднее", "Канал 6 Дисперсия", "Канал 19", 
+                    "Канал 49", "Канал 69 F"
+                ]
+
+                # Преобразуем список объектов в список списков
+                data_rows = []
+                for m in measurements:
+                    data_rows.append([
+                        m["number"],
+                        m["channel_1"],
+                        m["channel_2"],
+                        m["channel_3"],
+                        m["channel_4"],
+                        m["channel_5"],
+                        m["channel_6_avg"],
+                        m["channel_6_disp"],
+                        m["channel_19"],
+                        m["channel_49"],
+                        m["channel_69_func"]
+                    ])
+
+            else:
+                self.parent.add_log("❌ Неизвестная структура JSON")
+                return
+
+            # Передаём данные
+            full_data = [headers] + data_rows
+            self.parent.set_full_data(full_data)
+            self.parent.headers = headers
+            self.parent.sheet.headers(headers)
+            
+            self.parent.add_log(f"✅ Загружено из {selected} ({len(data_rows)} кадров)")
+            self.destroy()
+
+        except Exception as e:
+            self.parent.add_log(f"❌ Ошибка при загрузке JSON: {e}")
             exps = session.exec(select(Experiments).order_by(Experiments.id.desc())).all()
             
             values = []
@@ -725,11 +1065,19 @@ class App(ctk.CTk):
             # ("Регистрация данных", self.open_registration_setup),
             ("Управление данными", self.open_data_management),
             ("Научно-технический расчет", self.open_calculation_window),
+            ("Научно-технический расчет", self.open_calculation_window),
             ("О программе", self.open_about),
         ]
 
         self.registration_btn = ctk.CTkButton(btn_frame, text="Регистрация данных", width=150, command=self.open_registration_setup).pack(side="left", padx=5, pady=10)
 
+        self.download_btn = ctk.CTkButton(
+                btn_frame, 
+                text="Скачать данные эксперимента",
+                width=180, 
+                command=self.open_download_window
+            )
+        self.download_btn.pack(side="left", padx=5, pady=10)
         self.download_btn = ctk.CTkButton(
                 btn_frame, 
                 text="Скачать данные эксперимента",
@@ -903,6 +1251,18 @@ class App(ctk.CTk):
 
     def open_registration_setup(self):
         RegistrationSetupWindow(self)
+        self.add_log("Открыто окно 'Регистрации данных'")
+
+    def open_download_window(self):
+        DownloadWindow(self)
+        self.add_log("Открыто окно скачивания данных")
+
+    def open_data_management(self):
+        DataManagementWindow(self)
+        self.add_log("Открыто окно 'Управление данными'")
+    def open_calculation_window(self):
+        CalculationWindow(self)
+        self.add_log("Открыто окно 'Научно-технический расчёт'")
         self.add_log("Открыто окно 'Регистрации данных'")
 
     def open_download_window(self):
